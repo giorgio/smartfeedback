@@ -1,6 +1,7 @@
 streamlit
 pandas
 plotly
+supabase
 
 # Semana 3 (pieza de IA con Gemini): descomentar la línea siguiente.
 # La clave NUNCA va en el código: se guarda como secreto en Streamlit Cloud

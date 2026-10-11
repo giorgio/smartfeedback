@@ -1,9 +1,14 @@
-"""Analizador de Comentarios de Clientes — app Streamlit.
+"""SmartFeedback — Analizador de Comentarios de Clientes (app Streamlit).
 
-Versión 0: motor de análisis 100 % local (léxico en español), sin llamadas
-externas. En la semana 3 se añade la pieza de IA con Gemini leyendo la clave
-desde st.secrets (nunca en el código); si no hay clave, la app sigue
-funcionando con el motor local.
+Doble puerta:
+- **Puerta del cliente** (vista por defecto): chat "¿Necesitas ayuda?" donde
+  el cliente deja su comentario. Es el enlace/QR que comparte la PYME.
+- **Puerta del dueño** (barra lateral, con contraseña): panel de análisis con
+  sentimiento, temas, prioridades, gráficos e informes descargables.
+
+Los comentarios se guardan en Supabase (gratis) si hay credenciales en
+st.secrets, o en un CSV local como respaldo. La pieza de IA con Gemini
+(semana 3) leerá su clave también desde st.secrets, nunca del código.
 """
 
 import pandas as pd
@@ -20,8 +25,9 @@ from analyzer import (
     to_csv,
     to_markdown_report,
 )
-from sample_data import SAMPLE_COMMENTS
+from db import delete_all, load_comments, save_comment, use_supabase
 from lexicon import TOPICS
+from sample_data import SAMPLE_COMMENTS
 
 SENTIMENT_COLORS = {POSITIVO: "#16a34a", NEUTRO: "#d4a017", NEGATIVO: "#dc2626"}
 SENTIMENT_LABEL = {POSITIVO: "Positivo", NEUTRO: "Neutro", NEGATIVO: "Negativo"}
@@ -29,104 +35,75 @@ SENTIMENT_BADGE = {POSITIVO: "green", NEUTRO: "orange", NEGATIVO: "red"}
 TOPIC_LABEL = {t["id"]: t["label"] for t in TOPICS}
 
 st.set_page_config(
-    page_title="Analizador de Comentarios de Clientes",
+    page_title="SmartFeedback · Analizador de Comentarios",
     page_icon="💬",
     layout="wide",
 )
 
-# --------------------------------------------------------------------------- #
-# Cabecera
-# --------------------------------------------------------------------------- #
-st.title("💬 Analizador de Comentarios de Clientes")
-st.caption(
-    "Descubre qué opinan tus clientes y qué debes arreglar primero · "
-    "🔒 100 % local: tus datos no salen de esta app"
-)
 
-if "result" not in st.session_state:
-    st.session_state.result = None
+def _secret(name: str, default: str = "") -> str:
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
 
 # --------------------------------------------------------------------------- #
-# Cómo funciona (solo antes del primer análisis)
+# Vista del cliente: chat "¿Necesitas ayuda?"
 # --------------------------------------------------------------------------- #
-if st.session_state.result is None:
-    c1, c2, c3 = st.columns(3)
-    c1.info("**1 · Pega o sube**\n\nCopia reseñas, encuestas o mensajes de soporte: un comentario por línea. También vale un CSV.")
-    c2.info("**2 · Pulsa Analizar**\n\nEl motor detecta sentimiento, temas y urgencia de cada comentario, aquí mismo, sin servidores.")
-    c3.info("**3 · Actúa**\n\nObtén las prioridades ordenadas, con acciones sugeridas y un informe listo para compartir.")
+def render_cliente():
+    st.title("💬 ¿Necesitas ayuda?")
+    st.caption("Cuéntanos tu experiencia. Tu opinión nos ayuda a mejorar.")
 
-# --------------------------------------------------------------------------- #
-# Entrada de datos
-# --------------------------------------------------------------------------- #
-st.subheader("Comentarios a analizar")
+    with st.chat_message("assistant"):
+        st.markdown(
+            "¡Hola! 👋 Soy el asistente de atención al cliente. "
+            "¿Cómo fue tu experiencia con nosotros? "
+            "Puedes contarme lo que quieras: el pedido, el envío, la atención recibida..."
+        )
 
+    for msg in st.session_state.get("chat", []):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["text"])
 
-# Los callbacks se ejecutan ANTES de crear los widgets, por lo que pueden
-# modificar st.session_state.raw_text sin conflictos con el text_area.
-def load_example():
-    st.session_state.raw_text = "\n".join(SAMPLE_COMMENTS)
-    st.session_state.result = analyze_comments(SAMPLE_COMMENTS)
+    comentario = st.chat_input("Escribe aquí tu comentario...")
+    if comentario:
+        st.session_state.setdefault("chat", []).append({"role": "user", "text": comentario})
+        save_comment(comentario)
+        # Mini-análisis inmediato para personalizar el agradecimiento
+        resultado = analyze_comments([comentario])
+        sentimiento = resultado.comments[0].sentiment if resultado.comments else NEUTRO
+        if sentimiento == NEGATIVO:
+            respuesta = (
+                "Lamento que tu experiencia no haya sido buena. 😔 "
+                "Tu comentario ya está registrado y el equipo lo revisará con prioridad. "
+                "Gracias por ayudarnos a mejorar."
+            )
+        elif sentimiento == POSITIVO:
+            respuesta = (
+                "¡Muchas gracias por tus palabras! 😊 "
+                "Nos alegra que tu experiencia fuera buena. Tu opinión ya está registrada."
+            )
+        else:
+            respuesta = (
+                "Gracias por tu comentario, ya está registrado. "
+                "Lo tendremos en cuenta para seguir mejorando. 🙌"
+            )
+        st.session_state.chat.append({"role": "assistant", "text": respuesta})
+        st.rerun()
 
+    with st.expander("ℹ️ Qué pasa con tu comentario"):
+        st.markdown(
+            "Tu comentario se guarda de forma anónima y el equipo lo analiza "
+            "para detectar qué debe mejorar primero. No pedimos ni guardamos "
+            "datos personales."
+        )
 
-def handle_upload():
-    f = st.session_state.get("uploader")
-    if f is None:
-        return
-    content = f.read().decode("utf-8", errors="replace")
-    texts = parse_csv(content) if f.name.lower().endswith(".csv") else split_comments(content)
-    if texts:
-        st.session_state.raw_text = "\n".join(texts)
-        st.session_state.result = analyze_comments(texts)
-
-
-def reset_all():
-    st.session_state.result = None
-    st.session_state.raw_text = ""
-
-
-raw_text = st.text_area(
-    "Escribe un comentario por línea",
-    placeholder="Ejemplo:\nEl pedido llegó tarde y nadie me avisó del retraso.\nLa atención telefónica fue excelente, muy amables.",
-    height=160,
-    key="raw_text",
-)
-
-col_a, col_b, col_c, col_d = st.columns([2, 2, 2, 2])
-analyze_clicked = col_a.button(
-    f"✨ Analizar {len(split_comments(raw_text)) or ''} comentarios".rstrip(),
-    type="primary",
-    width="stretch",
-)
-col_b.button("📄 Cargar datos de ejemplo", width="stretch", on_click=load_example)
-col_c.file_uploader(
-    "Subir CSV o TXT",
-    type=["csv", "txt"],
-    label_visibility="collapsed",
-    key="uploader",
-    on_change=handle_upload,
-)
-col_d.button("🔄 Empezar de nuevo", width="stretch", on_click=reset_all)
-
-st.caption(
-    "Los datos de ejemplo son reseñas sintéticas de «TecnoHogar», una PYME ficticia. "
-    "No uses datos personales reales."
-)
-
-
-if analyze_clicked:
-    texts = split_comments(raw_text)
-    if not texts:
-        st.warning("No se encontraron comentarios. Pega texto (uno por línea) o sube un CSV.")
-    else:
-        st.session_state.result = analyze_comments(texts)
-
-result = st.session_state.result
 
 # --------------------------------------------------------------------------- #
-# Resultados
+# Vista del dueño: panel de análisis
 # --------------------------------------------------------------------------- #
-if result is not None:
-    st.divider()
+def render_results(result):
     total = result.total
     s = result.sentiment_counts
     pct = lambda n: round(n / total * 100) if total else 0
@@ -141,7 +118,6 @@ if result is not None:
 
     # Gráficos
     g1, g2 = st.columns(2)
-
     with g1:
         st.markdown("**Distribución del sentimiento**")
         pie_df = pd.DataFrame(
@@ -160,7 +136,6 @@ if result is not None:
         )
         fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300)
         st.plotly_chart(fig_pie, width="stretch")
-
     with g2:
         st.markdown("**Prioridad por tema** (frecuencia + negatividad + urgencia)")
         bar_df = pd.DataFrame(
@@ -208,15 +183,16 @@ if result is not None:
                 for e in p.examples:
                     st.markdown(f'- "{e}"')
 
-    # Palabras clave y detalle
+    # Palabras clave
     st.subheader("🔑 Palabras más repetidas")
     chips = " ".join(
         f":{'red' if k['negative'] else 'green'}[**{k['word']}** · {k['count']}]"
         for k in result.top_keywords
     )
-    st.markdown(chips)
+    st.markdown(chips or "Sin palabras destacadas todavía.")
     st.caption("Rojo = aparece sobre todo en comentarios negativos")
 
+    # Detalle por comentario
     st.subheader("📋 Detalle por comentario")
     filtro = st.radio(
         "Filtrar por sentimiento",
@@ -239,29 +215,132 @@ if result is not None:
     if not comments:
         st.caption("No hay comentarios con este filtro.")
 
-# --------------------------------------------------------------------------- #
-# Metodología
-# --------------------------------------------------------------------------- #
-with st.expander("ℹ️ Cómo se calcula la prioridad"):
-    st.markdown(
-        """
-Cada comentario recibe:
 
-- una **puntuación de sentimiento** (−100 a +100) según un léxico en español
-  con negaciones e intensificadores,
-- una **urgencia** (0–100) por palabras críticas, mayúsculas y exclamaciones, y
-- uno o varios **temas** por palabras clave.
+def render_panel():
+    st.title("📊 Panel del dueño")
+    modo = "☁️ Supabase (nube)" if use_supabase() else "💾 Archivo local (respaldo)"
+    st.caption(f"Almacenamiento activo: {modo} · 🔒 Ninguna clave aparece en el código")
+
+    tab_recibidos, tab_manual, tab_ajustes = st.tabs(
+        ["📥 Comentarios recibidos", "📝 Análisis manual", "⚙️ Ajustes"]
+    )
+
+    # ----- Comentarios recibidos desde el chat -----
+    with tab_recibidos:
+        col_r1, col_r2, _ = st.columns([2, 2, 6])
+        if col_r1.button("🔄 Actualizar", width="stretch"):
+            st.rerun()
+        comentarios = load_comments()
+        col_r2.metric("Recibidos", len(comentarios))
+
+        if not comentarios:
+            st.info(
+                "Todavía no hay comentarios. Comparte el enlace de la app (o un QR) "
+                "con tus clientes: al abrirlo verán el chat de «¿Necesitas ayuda?». "
+                "Cuando escriban, sus comentarios aparecerán aquí."
+            )
+        else:
+            if st.button("✨ Analizar comentarios recibidos", type="primary"):
+                st.session_state.result_recibidos = analyze_comments(comentarios)
+            if "result_recibidos" in st.session_state:
+                render_results(st.session_state.result_recibidos)
+
+    # ----- Análisis manual (pegar / subir / ejemplo) -----
+    with tab_manual:
+        st.markdown("Pega comentarios (uno por línea), sube un CSV/TXT o usa los datos de ejemplo.")
+
+        def load_example():
+            st.session_state.raw_text = "\n".join(SAMPLE_COMMENTS)
+            st.session_state.result_manual = analyze_comments(SAMPLE_COMMENTS)
+
+        def handle_upload():
+            f = st.session_state.get("uploader")
+            if f is None:
+                return
+            content = f.read().decode("utf-8", errors="replace")
+            texts = parse_csv(content) if f.name.lower().endswith(".csv") else split_comments(content)
+            if texts:
+                st.session_state.raw_text = "\n".join(texts)
+                st.session_state.result_manual = analyze_comments(texts)
+
+        raw_text = st.text_area(
+            "Un comentario por línea",
+            placeholder="El pedido llegó tarde y nadie me avisó del retraso.\nLa atención telefónica fue excelente, muy amables.",
+            height=140,
+            key="raw_text",
+        )
+        col_a, col_b, col_c = st.columns([2, 2, 2])
+        if col_a.button(
+            f"✨ Analizar {len(split_comments(raw_text)) or ''} comentarios".rstrip(),
+            type="primary",
+            width="stretch",
+        ):
+            texts = split_comments(raw_text)
+            if not texts:
+                st.warning("No se encontraron comentarios. Pega texto o sube un CSV.")
+            else:
+                st.session_state.result_manual = analyze_comments(texts)
+        col_b.button("📄 Datos de ejemplo", width="stretch", on_click=load_example)
+        col_c.file_uploader(
+            "Subir CSV o TXT",
+            type=["csv", "txt"],
+            label_visibility="collapsed",
+            key="uploader",
+            on_change=handle_upload,
+        )
+        st.caption("Los datos de ejemplo son reseñas sintéticas de «TecnoHogar», una PYME ficticia.")
+
+        if "result_manual" in st.session_state:
+            render_results(st.session_state.result_manual)
+
+    # ----- Ajustes -----
+    with tab_ajustes:
+        st.markdown("**Zona de mantenimiento**")
+        st.caption("Borrar los comentarios recibidos (útil antes de una demo).")
+        confirmar = st.checkbox("Sí, quiero borrar TODOS los comentarios recibidos")
+        if st.button("🗑️ Borrar comentarios", disabled=not confirmar):
+            delete_all()
+            st.session_state.pop("result_recibidos", None)
+            st.success("Comentarios borrados.")
+            st.rerun()
+
+    with st.expander("ℹ️ Cómo se calcula la prioridad"):
+        st.markdown(
+            """
+Cada comentario recibe una **puntuación de sentimiento** (−100 a +100, léxico
+en español con negaciones e intensificadores), una **urgencia** (0–100, por
+palabras críticas, mayúsculas y exclamaciones) y uno o varios **temas** por
+palabras clave.
 
 La **prioridad** de cada tema combina su frecuencia (35 %), el porcentaje de
 comentarios negativos (40 %) y la urgencia media (25 %).
-
-Todo el procesamiento se ejecuta en esta app: **ningún dato se envía a ningún
-servidor de terceros**.
 """
-    )
+        )
 
-st.divider()
-st.caption(
-    "Analizador de Comentarios de Clientes · Herramienta local y gratuita · "
-    "Sin claves de API en el código · Sin envío de datos"
+
+# --------------------------------------------------------------------------- #
+# Enrutado: cliente por defecto, dueño con contraseña en la barra lateral
+# --------------------------------------------------------------------------- #
+st.sidebar.title("SmartFeedback")
+rol = st.sidebar.radio("¿Quién eres?", ["👤 Soy cliente", "🔑 Soy el dueño"])
+
+if rol == "👤 Soy cliente":
+    render_cliente()
+else:
+    password = st.sidebar.text_input("Contraseña del panel", type="password")
+    password_correcta = _secret("PANEL_PASSWORD", "demo1234")
+    if not password:
+        st.sidebar.info("Introduce la contraseña para ver el panel de análisis.")
+        render_cliente()
+    elif password != password_correcta:
+        st.sidebar.error("Contraseña incorrecta.")
+        render_cliente()
+    else:
+        st.sidebar.success("Acceso concedido ✅")
+        render_panel()
+
+st.sidebar.divider()
+st.sidebar.caption(
+    "SmartFeedback · Herramienta gratuita · Sin claves de API en el código · "
+    "Los comentarios se guardan de forma anónima"
 )
