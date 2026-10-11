@@ -39,6 +39,7 @@ st.set_page_config(
     page_title="SmartFeedback · Analizador de Comentarios",
     page_icon="💬",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -373,28 +374,23 @@ comentarios negativos (40 %) y la urgencia media (25 %).
 
 
 # --------------------------------------------------------------------------- #
-# Enrutado: cliente por defecto, dueño con contraseña en la barra lateral
+# Enrutado: el cliente solo ve el chat. El dueño abre la barra lateral
+# (flecha › arriba a la izquierda), escribe la contraseña y accede al panel.
 # --------------------------------------------------------------------------- #
-st.sidebar.title("SmartFeedback")
-rol = st.sidebar.radio("¿Quién eres?", ["👤 Soy cliente", "🔑 Soy el dueño"])
+with st.sidebar:
+    with st.expander("🔑 Acceso del equipo"):
+        password = st.text_input("Contraseña del panel", type="password")
+    st.caption(
+        "SmartFeedback · Herramienta gratuita · Sin claves de API en el código · "
+        "Los comentarios se guardan de forma anónima"
+    )
 
-if rol == "👤 Soy cliente":
-    render_cliente()
+password_correcta = _secret("PANEL_PASSWORD", "demo1234")
+
+if password and password == password_correcta:
+    st.sidebar.success("Acceso concedido ✅")
+    render_panel()
 else:
-    password = st.sidebar.text_input("Contraseña del panel", type="password")
-    password_correcta = _secret("PANEL_PASSWORD", "demo1234")
-    if not password:
-        st.sidebar.info("Introduce la contraseña para ver el panel de análisis.")
-        render_cliente()
-    elif password != password_correcta:
+    if password:
         st.sidebar.error("Contraseña incorrecta.")
-        render_cliente()
-    else:
-        st.sidebar.success("Acceso concedido ✅")
-        render_panel()
-
-st.sidebar.divider()
-st.sidebar.caption(
-    "SmartFeedback · Herramienta gratuita · Sin claves de API en el código · "
-    "Los comentarios se guardan de forma anónima"
-)
+    render_cliente()
