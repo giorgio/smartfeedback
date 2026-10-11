@@ -77,7 +77,7 @@ TOPICS = [
   {
     'id': 'envio',
     'label': 'Envío y entrega',
-    'keywords': ['envío', 'envio', 'envíos', 'entrega', 'entregaron', 'entregó', 'llegó', 'llego', 'llegaron', 'paquete', 'paquetería', 'mensajero', 'mensajería', 'repartidor', 'reparto', 'transporte', 'seguimiento', 'almacén', 'pedido llegó'],
+    'keywords': ['envío', 'envio', 'envíos', 'entrega', 'entregaron', 'entregó', 'llegó', 'llego', 'llegaron', 'paquete', 'paquetería', 'mensajero', 'mensajería', 'repartidor', 'reparto', 'transporte', 'seguimiento', 'almacén', 'pedido', 'pedidos'],
     'action': 'Auditar la cadena logística y mejorar la información de seguimiento al cliente.',
   },
   {
@@ -129,3 +129,52 @@ STOPWORDS = set([
   'quieren', 'fui', 'fueron', 'voy', 'van', 'iba', 'iban', 'dije', 'dijo', 'dijeron',
   'cliente', 'clientes', 'persona', 'personas', 'gente', 'cosa', 'cosas', 'parte', 'vez',
 ])
+
+
+# Respuestas de ayuda del asistente, una por tema.
+# El chat las usa para contestar al cliente según lo que detecta en su mensaje.
+TOPIC_HELP = {
+    'envio': (
+        "📦 Sobre tu pedido: en el correo de confirmación tienes el número de "
+        "seguimiento para ver dónde está. Si no te llegó o lleva más días de "
+        "lo previsto, déjame aquí tu número de pedido y el equipo lo revisa hoy mismo."
+    ),
+    'atencion': (
+        "🎧 Siento que la atención no fuera la adecuada. Registro tu comentario "
+        "y el responsable del equipo lo revisará para darte una respuesta. "
+        "Si prefieres hablar con una persona, nuestro horario de atención es de 9 a 18 h."
+    ),
+    'precio': (
+        "💶 Sobre precios y ofertas: las promociones vigentes están publicadas "
+        "en la tienda. Si crees que se te aplicó un precio incorrecto, dime el "
+        "producto y lo revisamos."
+    ),
+    'calidad': (
+        "🛠️ Lamento que el producto no cumpliera lo esperado. Todos tienen "
+        "garantía: cuéntame qué falla exactamente y el equipo te indicará cómo "
+        "hacer el cambio o la reparación."
+    ),
+    'web': (
+        "💻 Gracias por avisar del problema con la web o la app. Mientras el "
+        "equipo técnico lo revisa, prueba a recargar la página o usar otro "
+        "navegador. Dejo registrada la incidencia."
+    ),
+    'devoluciones': (
+        "↩️ Para devoluciones tienes 30 días desde la compra: dime tu número "
+        "de pedido y te enviamos la etiqueta. El reembolso se realiza en un "
+        "máximo de 5 días laborables desde que recibimos el paquete."
+    ),
+    'tiempos': (
+        "⏱️ Lamento la espera. Dejo registrado tu comentario para que el equipo "
+        "revise los tiempos de atención en esa franja horaria."
+    ),
+    'instalaciones': (
+        "🏪 Gracias por el aviso sobre nuestras instalaciones. Lo paso al equipo "
+        "responsable para revisarlo cuanto antes."
+    ),
+    'otros': (
+        "Gracias por tu mensaje. Lo he registrado y el equipo lo revisará. "
+        "Si tu consulta es sobre un pedido, una devolución o una incidencia "
+        "concreta, cuéntame más detalles y te oriento."
+    ),
+}

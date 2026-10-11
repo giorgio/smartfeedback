@@ -20,13 +20,14 @@ from analyzer import (
     NEUTRO,
     POSITIVO,
     analyze_comments,
+    normalize,
     parse_csv,
     split_comments,
     to_csv,
     to_markdown_report,
 )
-from db import delete_all, load_comments, save_comment, use_supabase
-from lexicon import TOPICS
+from db import StorageError, delete_all, load_comments, save_comment, use_supabase
+from lexicon import TOPICS, TOPIC_HELP
 from sample_data import SAMPLE_COMMENTS
 
 SENTIMENT_COLORS = {POSITIVO: "#16a34a", NEUTRO: "#d4a017", NEGATIVO: "#dc2626"}
@@ -49,55 +50,98 @@ def _secret(name: str, default: str = "") -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Vista del cliente: chat "¿Necesitas ayuda?"
+# Vista del cliente: asistente "¿Necesitas ayuda?"
 # --------------------------------------------------------------------------- #
+# Si un mensaje toca varios temas, el asistente responde por el más accionable
+PRECEDENCIA_AYUDA = ["devoluciones", "envio", "web", "calidad", "atencion", "precio", "tiempos", "instalaciones"]
+
+
+def elegir_tema_ayuda(texto: str) -> str:
+    """Elige el tema con más palabras clave presentes (desempate por precedencia)."""
+    norm = normalize(texto)
+    hits = {}
+    for t in TOPICS:
+        n = sum(1 for k in t["keywords"] if normalize(k) in norm)
+        if n:
+            hits[t["id"]] = n
+    if not hits:
+        return "otros"
+    return max(
+        hits,
+        key=lambda tid: (hits[tid], -PRECEDENCIA_AYUDA.index(tid) if tid in PRECEDENCIA_AYUDA else -99),
+    )
+
+
+def respuesta_asistente(analisis, guardado: bool, texto: str) -> str:
+    """Compone la respuesta del chat según sentimiento, tema y urgencia."""
+    if not guardado:
+        return (
+            "Gracias por tu mensaje. 🙏 Ahora mismo no he podido registrarlo "
+            "por un problema técnico; por favor, inténtalo de nuevo en unos minutos."
+        )
+
+    c = analisis.comments[0]
+    tema = elegir_tema_ayuda(texto)
+
+    # Saludos y mensajes cortos sin tema: ofrecer ayuda, no registrar como queja
+    if len(texto.split()) <= 4 and tema == "otros" and c.sentiment != NEGATIVO:
+        return (
+            "¡Hola! 👋 ¿En qué puedo ayudarte? Cuéntame si tu consulta es sobre "
+            "un pedido, una devolución, un producto o la atención que has recibido."
+        )
+
+    partes = []
+    if c.sentiment == NEGATIVO:
+        partes.append("Lamento que tu experiencia no haya sido buena. 😔")
+        partes.append(TOPIC_HELP.get(tema, TOPIC_HELP["otros"]))
+        if c.urgency >= 50:
+            partes.append("🚨 Veo que es urgente: lo marco con **prioridad** para el equipo.")
+        else:
+            partes.append("Tu mensaje ya está registrado y el equipo lo revisará.")
+    elif c.sentiment == POSITIVO:
+        partes.append(
+            "¡Me alegra escuchar eso! 😊 Se lo haré llegar al equipo: comentarios "
+            "como el tuyo nos animan a seguir mejorando. ¿Puedo ayudarte en algo más?"
+        )
+    else:  # neutro: consulta directa, respondemos con la ayuda del tema
+        partes.append(TOPIC_HELP.get(tema, TOPIC_HELP["otros"]))
+        partes.append("Tu mensaje queda registrado por si el equipo necesita darle seguimiento.")
+
+    return "\n\n".join(partes)
+
+
 def render_cliente():
     st.title("💬 ¿Necesitas ayuda?")
-    st.caption("Cuéntanos tu experiencia. Tu opinión nos ayuda a mejorar.")
+    st.caption("Asistente de atención al cliente · te responde al momento")
 
     with st.chat_message("assistant"):
         st.markdown(
-            "¡Hola! 👋 Soy el asistente de atención al cliente. "
-            "¿Cómo fue tu experiencia con nosotros? "
-            "Puedes contarme lo que quieras: el pedido, el envío, la atención recibida..."
+            "¡Hola! 👋 **¿Necesitas ayuda?** Cuéntame qué pasa: un pedido que "
+            "no llega, una devolución, un problema con un producto, la atención "
+            "recibida... Haré lo posible por ayudarte ahora mismo y, si hace "
+            "falta, aviso al equipo."
         )
 
     for msg in st.session_state.get("chat", []):
         with st.chat_message(msg["role"]):
             st.markdown(msg["text"])
 
-    comentario = st.chat_input("Escribe aquí tu comentario...")
+    comentario = st.chat_input("Escribe aquí tu mensaje...")
     if comentario:
         st.session_state.setdefault("chat", []).append({"role": "user", "text": comentario})
-        save_comment(comentario)
-        # Mini-análisis inmediato para personalizar el agradecimiento
-        resultado = analyze_comments([comentario])
-        sentimiento = resultado.comments[0].sentiment if resultado.comments else NEUTRO
-        if sentimiento == NEGATIVO:
-            respuesta = (
-                "Lamento que tu experiencia no haya sido buena. 😔 "
-                "Tu comentario ya está registrado y el equipo lo revisará con prioridad. "
-                "Gracias por ayudarnos a mejorar."
-            )
-        elif sentimiento == POSITIVO:
-            respuesta = (
-                "¡Muchas gracias por tus palabras! 😊 "
-                "Nos alegra que tu experiencia fuera buena. Tu opinión ya está registrada."
-            )
+        try:
+            save_comment(comentario)
+            guardado = True
+        except StorageError:
+            guardado = False
+        # El motor detecta sentimiento, tema y urgencia para responder con ayuda
+        analisis = analyze_comments([comentario])
+        if not analisis.comments:
+            respuesta = TOPIC_HELP["otros"]
         else:
-            respuesta = (
-                "Gracias por tu comentario, ya está registrado. "
-                "Lo tendremos en cuenta para seguir mejorando. 🙌"
-            )
+            respuesta = respuesta_asistente(analisis, guardado, comentario)
         st.session_state.chat.append({"role": "assistant", "text": respuesta})
         st.rerun()
-
-    with st.expander("ℹ️ Qué pasa con tu comentario"):
-        st.markdown(
-            "Tu comentario se guarda de forma anónima y el equipo lo analiza "
-            "para detectar qué debe mejorar primero. No pedimos ni guardamos "
-            "datos personales."
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -230,7 +274,14 @@ def render_panel():
         col_r1, col_r2, _ = st.columns([2, 2, 6])
         if col_r1.button("🔄 Actualizar", width="stretch"):
             st.rerun()
-        comentarios = load_comments()
+        try:
+            comentarios = load_comments()
+        except StorageError:
+            comentarios = []
+            st.error(
+                "No se pudieron cargar los comentarios. Revisa los secretos "
+                "(SUPABASE_URL / SUPABASE_KEY) y los permisos de la tabla en Supabase."
+            )
         col_r2.metric("Recibidos", len(comentarios))
 
         if not comentarios:
@@ -299,9 +350,12 @@ def render_panel():
         st.caption("Borrar los comentarios recibidos (útil antes de una demo).")
         confirmar = st.checkbox("Sí, quiero borrar TODOS los comentarios recibidos")
         if st.button("🗑️ Borrar comentarios", disabled=not confirmar):
-            delete_all()
-            st.session_state.pop("result_recibidos", None)
-            st.success("Comentarios borrados.")
+            try:
+                delete_all()
+                st.session_state.pop("result_recibidos", None)
+                st.success("Comentarios borrados.")
+            except StorageError:
+                st.error("No se pudieron borrar los comentarios. Revisa los permisos de Supabase.")
             st.rerun()
 
     with st.expander("ℹ️ Cómo se calcula la prioridad"):
