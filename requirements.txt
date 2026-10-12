@@ -2,8 +2,8 @@ streamlit
 pandas
 plotly
 supabase
+google-genai
 
-# Semana 3 (pieza de IA con Gemini): descomentar la línea siguiente.
-# La clave NUNCA va en el código: se guarda como secreto en Streamlit Cloud
-# (Advanced settings, formato TOML: GEMINI_API_KEY = "...").
-# google-generativeai
+# La clave de Gemini NUNCA va en el código: se guarda como secreto en
+# Streamlit Cloud (Settings → Secrets, formato TOML: GEMINI_API_KEY = "...").
+# Si no hay clave o la API falla, la app responde con el motor local de reglas.
