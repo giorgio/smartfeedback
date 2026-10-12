@@ -51,6 +51,50 @@ def _secret(name: str, default: str = "") -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Pieza de IA: Gemini (semana 3). La clave NUNCA va en el código: se lee de
+# st.secrets["GEMINI_API_KEY"]. Si falta la clave o la API falla (cuota, red,
+# clave inválida), la app responde con el motor local de reglas y avisa con un
+# mensaje claro; nunca muestra un error en rojo.
+# --------------------------------------------------------------------------- #
+GEMINI_MODEL = "gemini-3.8-flash"  # si da error 429 (cuota agotada), probad "gemini-3.5-flash-lite"
+SYSTEM_PROMPT_GEMINI = (
+    "Eres el asistente de atención al cliente de una pyme. Clasifica mentalmente "
+    "cada comentario en un tema (pedidos, devoluciones, producto, atención, precio, "
+    "web, tiempos, instalaciones) y una urgencia (alta, media, baja), y responde al "
+    "cliente en español, con frases cortas, amables y accionables. Si el mensaje no "
+    "trata de la tienda, di amablemente que solo puedes ayudar con temas de atención "
+    "al cliente. No inventes datos de pedidos ni de envíos."
+)
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+
+    _GENAI_OK = True
+except ImportError:  # la librería no está instalada (p. ej. en local)
+    _GENAI_OK = False
+
+
+def responder_con_gemini(texto: str) -> str | None:
+    """Respuesta redactada por Gemini, o None si no hay clave o la API falla."""
+    if not _GENAI_OK:
+        return None
+    clave = _secret("GEMINI_API_KEY", "")
+    if not clave:
+        return None
+    try:
+        cliente = genai.Client(api_key=clave)
+        respuesta = cliente.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=texto,
+            config=genai_types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT_GEMINI),
+        )
+        return respuesta.text or None
+    except Exception:  # cuota agotada (429), clave incorrecta, red caída...
+        return None
+
+
+# --------------------------------------------------------------------------- #
 # Vista del cliente: asistente "¿Necesitas ayuda?"
 # --------------------------------------------------------------------------- #
 # Si un mensaje toca varios temas, el asistente responde por el más accionable
@@ -113,7 +157,10 @@ def respuesta_asistente(analisis, guardado: bool, texto: str) -> str:
 
 def render_cliente():
     st.title("💬 ¿Necesitas ayuda?")
-    st.caption("Asistente de atención al cliente · te responde al momento")
+    if _secret("GEMINI_API_KEY", ""):
+        st.caption("Asistente de atención al cliente con IA · te responde al momento")
+    else:
+        st.caption("Asistente de atención al cliente · te responde al momento")
 
     with st.chat_message("assistant"):
         st.markdown(
@@ -141,6 +188,18 @@ def render_cliente():
             respuesta = TOPIC_HELP["otros"]
         else:
             respuesta = respuesta_asistente(analisis, guardado, comentario)
+        # Semana 3: si hay clave de Gemini, la respuesta la redacta la IA.
+        # Si la API falla, se mantiene la respuesta del motor local y se avisa.
+        if guardado and _secret("GEMINI_API_KEY", ""):
+            respuesta_ia = responder_con_gemini(comentario)
+            if respuesta_ia:
+                respuesta = respuesta_ia
+            else:
+                st.toast(
+                    "La IA está ocupada ahora mismo; te respondo con el asistente local. "
+                    "Tu mensaje queda registrado igualmente.",
+                    icon="⚠️",
+                )
         st.session_state.chat.append({"role": "assistant", "text": respuesta})
         st.rerun()
 
