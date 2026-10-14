@@ -63,7 +63,9 @@ SYSTEM_PROMPT_GEMINI = (
     "web, tiempos, instalaciones) y una urgencia (alta, media, baja), y responde al "
     "cliente en español, con frases cortas, amables y accionables. Si el mensaje no "
     "trata de la tienda, di amablemente que solo puedes ayudar con temas de atención "
-    "al cliente. No inventes datos de pedidos ni de envíos."
+    "al cliente. No inventes datos de pedidos ni de envíos. No pidas datos personales "
+    "(nombre, correo electrónico ni teléfono): el registro es anónimo; si hace falta "
+    "una referencia, pide solo el número de pedido."
 )
 
 try:
@@ -75,6 +77,12 @@ except ImportError:  # la librería no está instalada (p. ej. en local)
     _GENAI_OK = False
 
 
+@st.cache_resource
+def obtener_cliente_gemini(api_key: str) -> "genai.Client":
+    """Crea el cliente de Gemini una sola vez y lo reutiliza entre mensajes."""
+    return genai.Client(api_key=api_key)
+
+
 def responder_con_gemini(texto: str) -> str | None:
     """Respuesta redactada por Gemini, o None si no hay clave o la API falla."""
     if not _GENAI_OK:
@@ -83,7 +91,7 @@ def responder_con_gemini(texto: str) -> str | None:
     if not clave:
         return None
     try:
-        cliente = genai.Client(api_key=clave)
+        cliente = obtener_cliente_gemini(clave)
         respuesta = cliente.models.generate_content(
             model=GEMINI_MODEL,
             contents=texto,
@@ -135,6 +143,15 @@ def respuesta_asistente(analisis, guardado: bool, texto: str) -> str:
             "un pedido, una devolución, un producto o la atención que has recibido."
         )
 
+    # Mensajes fuera de tema: rechazo amable (criterio de aceptación nº 4).
+    # Así el respaldo local también cumple lo que la especificación pide.
+    if tema == "otros" and c.sentiment != NEGATIVO:
+        return (
+            "Gracias por tu mensaje. 🙏 Solo puedo ayudarte con temas de la "
+            "tienda: pedidos, devoluciones, productos, precios o la atención "
+            "recibida. Si tu consulta va de eso, cuéntame más detalles."
+        )
+
     partes = []
     if c.sentiment == NEGATIVO:
         partes.append("Lamento que tu experiencia no haya sido buena. 😔")
@@ -176,6 +193,11 @@ def render_cliente():
 
     comentario = st.chat_input("Escribe aquí tu mensaje...")
     if comentario:
+        comentario = comentario.strip()
+        if not comentario:
+            # Criterio de aceptación: texto vacío o solo espacios no se guarda
+            st.warning("Escribe tu mensaje antes de enviarlo 🙏")
+            return
         st.session_state.setdefault("chat", []).append({"role": "user", "text": comentario})
         try:
             save_comment(comentario)
